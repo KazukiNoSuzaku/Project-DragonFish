@@ -11,7 +11,13 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from dragonfish.core.events import TextDelta, ThinkingStarted, ToolCallStarted, Usage
+from dragonfish.core.events import (
+    ProgressDelta,
+    TextDelta,
+    ThinkingStarted,
+    ToolCallStarted,
+    Usage,
+)
 
 
 class Cancelled(Exception):
@@ -51,7 +57,9 @@ class Completed:
     tool_calls: list[ToolCall] = field(default_factory=list)
 
 
-ProviderEvent = TextDelta | ThinkingStarted | ToolCallStarted | ToolInputDelta | Completed
+ProviderEvent = (
+    TextDelta | ThinkingStarted | ProgressDelta | ToolCallStarted | ToolInputDelta | Completed
+)
 
 
 class Provider(Protocol):

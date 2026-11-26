@@ -8,7 +8,17 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from dragonfish import __version__
-from dragonfish.core.config import EFFORT_LEVELS, PERMISSION_MODES, load_settings
+from dragonfish.core.agent import Agent
+from dragonfish.core.config import (
+    EFFORT_LEVELS,
+    PERMISSION_MODES,
+    Settings,
+    load_settings,
+    load_system_prompt,
+)
+from dragonfish.core.permissions import PermissionGate
+from dragonfish.providers.base import Provider, ProviderError
+from dragonfish.tools.registry import Registry
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,16 +34,61 @@ def build_parser() -> argparse.ArgumentParser:
         "--workspace", type=Path, help="folder the agent may work in (default: cwd)"
     )
     parser.add_argument("-p", "--print", dest="prompt", help="run one prompt headless and exit")
+    parser.add_argument(
+        "--demo", action="store_true", help="try the UI offline with a scripted model (no API key)"
+    )
     return parser
+
+
+def build_agent(settings: Settings, demo: bool) -> Agent:
+    registry = Registry()  # file and shell tools arrive in build steps 6-7
+    provider: Provider
+    if demo:
+        from dragonfish.providers.demo import LOOK_AROUND, DemoProvider
+
+        provider = DemoProvider()
+        registry.register(LOOK_AROUND)
+    else:
+        from dragonfish.providers.anthropic_provider import AnthropicProvider
+
+        provider = AnthropicProvider(settings)  # raises ProviderError without credentials
+    return Agent(
+        provider,
+        registry,
+        PermissionGate(settings.permission_mode),
+        settings,
+        load_system_prompt(settings),
+    )
+
+
+def run_headless(agent: Agent, prompt: str) -> int:
+    from dragonfish.cli.plain import PlainPrinter
+
+    # Headless runs never prompt: anything needing approval is denied unless --mode yolo.
+    printer = PlainPrinter()
+    finished = "end_turn"
+    for event in agent.run(prompt):
+        printer.handle(event)
+        finished = getattr(event, "stop_reason", finished)
+    return 0 if finished == "end_turn" else 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = load_settings(args)
-    # The interactive REPL arrives in build step 5 (see docs/IMPLEMENTATION.md).
-    print(f"DragonFish {__version__} · model {settings.model} · workspace {settings.workspace}")
-    print("The interactive terminal is not built yet. Run the tests with: uv run pytest")
-    return 0
+    try:
+        agent = build_agent(settings, args.demo)
+    except ProviderError as exc:
+        print(
+            f"error: {exc}\nTip: try the interface offline with: dragonfish --demo", file=sys.stderr
+        )
+        return 2
+    if args.prompt:
+        return run_headless(agent, args.prompt)
+
+    from dragonfish.cli.app import App
+
+    return App(agent, demo=args.demo).run()
 
 
 if __name__ == "__main__":

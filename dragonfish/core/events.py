@@ -40,6 +40,13 @@ class ThinkingStarted:
 
 
 @dataclass(frozen=True)
+class ProgressDelta:
+    """A piece of a short progress note the model writes between tool calls."""
+
+    text: str
+
+
+@dataclass(frozen=True)
 class ToolCallStarted:
     """The model began writing a tool call; input is still streaming."""
 
@@ -101,6 +108,7 @@ class TurnFinished:
 AgentEvent = (
     TextDelta
     | ThinkingStarted
+    | ProgressDelta
     | ToolCallStarted
     | ToolCallReady
     | ToolResultEvent
