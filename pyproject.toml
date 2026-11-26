@@ -1,0 +1,43 @@
+[project]
+name = "dragonfish"
+version = "0.1.0"
+description = "A small, hand-built AI coding agent for the terminal."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=1.0",
+    "jsonschema>=4.23",
+    "prompt-toolkit>=3.0",
+    "python-dotenv>=1.0",
+    "rich>=13.9",
+]
+
+[project.scripts]
+dragonfish = "dragonfish.__main__:main"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.13",
+    "types-jsonschema>=4.23",
+    "pytest>=8.3",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dragonfish"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
