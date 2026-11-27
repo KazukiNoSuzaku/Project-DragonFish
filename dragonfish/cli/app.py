@@ -5,6 +5,7 @@ from __future__ import annotations
 import queue
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from prompt_toolkit import PromptSession
@@ -14,13 +15,16 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style as PTStyle
 from rich.console import Console
+from rich.padding import Padding
 from rich.text import Text
 
 from dragonfish.cli import commands, theme
 from dragonfish.cli.banner import banner
-from dragonfish.cli.render import Renderer, short_args
+from dragonfish.cli.render import Renderer, diff_view, short_args
 from dragonfish.core.agent import Agent
 from dragonfish.core.events import PermissionAnswer, PermissionRequest
+from dragonfish.tools.base import ToolError
+from dragonfish.tools.fs import make_diff, resolve_in_workspace
 
 _DONE = object()
 
@@ -70,7 +74,7 @@ class App:
     def _toolbar(self) -> HTML:
         s = self.agent.settings
         cost = self.renderer.session_usage.cost_usd
-        model = "demo" if self.demo else s.model
+        model = "demo" if self.demo else s.display_model
         return HTML(
             f" <b>{model}</b> · effort {s.effort} · mode {self.agent.gate.mode}"
             f" · ${cost:.3f} · /help"
@@ -79,7 +83,9 @@ class App:
     def print_banner(self) -> None:
         s = self.agent.settings
         self.console.print(
-            banner(s.model, s.effort, self.agent.gate.mode, _home(str(s.workspace)), self.demo)
+            banner(
+                s.display_model, s.effort, self.agent.gate.mode, _home(str(s.workspace)), self.demo
+            )
         )
 
     # -------------------------------------------------------------------- run
@@ -160,8 +166,12 @@ class App:
         q.append("  ◆ ", style=f"bold {theme.GOLD}")
         q.append(req.name, style=f"bold {theme.TEXT}")
         q.append(f"  {short_args(req.input, 90)}\n", style=theme.MUTED)
-        q.append(f"    {req.reason}\n", style=theme.MUTED)
+        q.append(f"    {req.reason}", style=theme.MUTED)
         self.console.print(q)
+        preview = permission_preview(req, self.agent.settings.workspace)
+        if preview is not None:
+            self.console.print(Padding(preview, (0, 0, 0, 4)))
+        self.console.print()
         while True:
             try:
                 answer = (
@@ -183,8 +193,22 @@ class App:
                 return "no"
 
 
-def _home(path: str) -> str:
-    from pathlib import Path
+def permission_preview(req: PermissionRequest, workspace: Path) -> Any:
+    """Show what a file change will do before the user approves it."""
+    inp = req.input
+    try:
+        if req.name == "edit_file":
+            diff = make_diff(inp["path"], inp["old_string"], inp["new_string"])
+            return diff_view(diff, max_lines=30)
+        if req.name == "write_file":
+            target = resolve_in_workspace(workspace, inp["path"])
+            before = target.read_text(errors="replace") if target.is_file() else ""
+            return diff_view(make_diff(inp["path"], before, inp["content"]), max_lines=30)
+    except (KeyError, ToolError, OSError):
+        return None  # the tool itself will report the problem
+    return None
 
+
+def _home(path: str) -> str:
     home = str(Path.home())
     return "~" + path[len(home) :] if path.startswith(home) else path

@@ -12,6 +12,10 @@ dependencies = [
     "rich>=13.9",
 ]
 
+[project.optional-dependencies]
+# Run a local open model (Qwen) on Apple Silicon: uv sync --extra local
+local = ["mlx-lm>=0.28", "huggingface-hub>=0.30"]
+
 [project.scripts]
 dragonfish = "dragonfish.__main__:main"
 

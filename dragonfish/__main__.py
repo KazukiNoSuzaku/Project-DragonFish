@@ -37,17 +37,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--demo", action="store_true", help="try the UI offline with a scripted model (no API key)"
     )
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help="run a local open model (Qwen via MLX, Apple Silicon) instead of Claude",
+    )
+    parser.add_argument(
+        "--local-model",
+        help="Hugging Face MLX model id (default: mlx-community/Qwen3.5-9B-4bit)",
+    )
     return parser
 
 
 def build_agent(settings: Settings, demo: bool) -> Agent:
-    registry = Registry()  # file and shell tools arrive in build steps 6-7
+    from dragonfish.tools import default_tools
+
+    registry = Registry(default_tools())
     provider: Provider
     if demo:
         from dragonfish.providers.demo import LOOK_AROUND, DemoProvider
 
         provider = DemoProvider()
-        registry.register(LOOK_AROUND)
+        registry = Registry([LOOK_AROUND])
+    elif settings.provider == "local":
+        provider = _start_local(settings)
     else:
         from dragonfish.providers.anthropic_provider import AnthropicProvider
 
@@ -59,6 +72,30 @@ def build_agent(settings: Settings, demo: bool) -> Agent:
         settings,
         load_system_prompt(settings),
     )
+
+
+def _start_local(settings: Settings) -> Provider:
+    from rich.console import Console
+
+    from dragonfish.providers import local_mlx
+
+    console = Console(stderr=True)
+    if not local_mlx.mlx_available():
+        raise ProviderError(
+            "Local models need the MLX extra (Apple Silicon only). Install it with: "
+            "uv sync --extra local"
+        )
+    if not local_mlx.is_downloaded(settings):
+        target = local_mlx.model_dir(settings)
+        console.print(
+            f"[bold]{settings.local_model}[/] is not downloaded yet (about 6 GB).\n"
+            f"It will be saved to {target}."
+        )
+        if console.input("Download it now? [Y/n] ").strip().lower() not in ("", "y", "yes"):
+            raise ProviderError("Local model not downloaded.")
+        local_mlx.download_model(settings)
+    with console.status(f"Loading {settings.display_model} into memory…", spinner="dots"):
+        return local_mlx.LocalMLXProvider(settings)
 
 
 def run_headless(agent: Agent, prompt: str) -> int:

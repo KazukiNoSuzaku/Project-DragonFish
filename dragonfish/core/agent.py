@@ -29,7 +29,7 @@ from dragonfish.providers.base import (
     ToolCall,
     ToolInputDelta,
 )
-from dragonfish.tools.base import Permission, Tool, ToolContext, ToolResult
+from dragonfish.tools.base import Permission, Tool, ToolContext, ToolError, ToolResult
 from dragonfish.tools.registry import Registry, truncate
 
 PermissionCallback = Callable[[PermissionRequest], PermissionAnswer]
@@ -228,7 +228,7 @@ class Agent:
         blocks = []
         for item in pending:
             result = item.result or ToolResult(INTERRUPTED, is_error=True)
-            output = truncate(result.output)
+            output = truncate(result.output, self.settings.tool_output_limit)
             yield ToolResultEvent(
                 item.call.id, item.call.name, output, result.is_error, result.display
             )
@@ -247,6 +247,8 @@ def _run_tool(tool: Tool | None, tool_input: dict[str, Any], ctx: ToolContext) -
     assert tool is not None
     try:
         return tool.run(tool_input, ctx)
+    except ToolError as exc:  # an expected failure with a message written for the model
+        return ToolResult(str(exc), is_error=True)
     except Exception as exc:  # A broken tool must never crash the agent.
         return ToolResult(f"Tool crashed: {type(exc).__name__}: {exc}", is_error=True)
 

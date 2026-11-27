@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any
 
 
+class ToolError(Exception):
+    """An expected tool failure. The message is sent to the model, so make it actionable."""
+
+
 class Permission(Enum):
     READ = "read"  # inspect files; never changes anything
     WRITE = "write"  # create or modify files in the workspace

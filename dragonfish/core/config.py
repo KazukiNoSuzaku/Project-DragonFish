@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import platform
+import shutil
+import subprocess
 import tomllib
 from dataclasses import dataclass, field, fields, replace
 from datetime import date
@@ -35,6 +37,23 @@ class Settings:
     max_iterations: int = 60  # Hard stop for runaway loops.
     refusal_fallback: bool = True  # Server-side fallback model when a request is refused.
     data_dir: Path = field(default_factory=_default_data_dir)
+    # Local open model (MLX, Apple Silicon). Used when provider == "local".
+    provider: str = "anthropic"  # anthropic | local
+    local_model: str = "mlx-community/Qwen3.5-9B-4bit"
+    local_context: int = 65536  # Qwen3.5-9B: ~32 KB of KV cache per token -> ~2 GB at 64k
+    local_max_tokens: int = 8192
+    local_keep_tool_results: int = 6  # newest tool results kept in full when trimming
+
+    @property
+    def tool_output_limit(self) -> int:
+        """Characters of tool output sent to the model. Small context windows get less."""
+        return 8_000 if self.provider == "local" else 30_000
+
+    @property
+    def display_model(self) -> str:
+        if self.provider == "local":
+            return f"{self.local_model.split('/')[-1]} (local)"
+        return self.model
 
     def __post_init__(self) -> None:
         if self.effort not in EFFORT_LEVELS:
@@ -43,6 +62,8 @@ class Settings:
             raise ConfigError(
                 f"permission mode must be one of {PERMISSION_MODES}, got {self.permission_mode!r}"
             )
+        if self.provider not in ("anthropic", "local"):
+            raise ConfigError(f"provider must be 'anthropic' or 'local', got {self.provider!r}")
         if self.max_iterations < 1:
             raise ConfigError("max_iterations must be at least 1")
         # Normalise the workspace once so every path check compares resolved paths.
@@ -78,6 +99,8 @@ def load_settings(args: Any = None, *, config_file: Path | None = None) -> Setti
             "effort": getattr(args, "effort", None),
             "permission_mode": getattr(args, "mode", None),
             "workspace": getattr(args, "workspace", None),
+            "provider": "local" if getattr(args, "local", False) else None,
+            "local_model": getattr(args, "local_model", None),
         }
         overrides.update({k: v for k, v in cli.items() if v is not None})
     return replace(base, **overrides)
@@ -90,4 +113,28 @@ def load_system_prompt(settings: Settings) -> str:
         workspace=settings.workspace,
         os=f"{platform.system()} {platform.release()} ({platform.machine()})",
         date=date.today().isoformat(),
+        tooling=detect_tooling(settings.workspace),
     )
+
+
+def detect_tooling(workspace: Path) -> str:
+    """Describe the Python tooling the agent's shell will see, so it picks working commands."""
+    from dragonfish.tools.shell import build_env  # same PATH as the bash tool
+
+    search_path = build_env(workspace)["PATH"]
+    lines = []
+    if shutil.which("uv", path=search_path):
+        lines.append(
+            "- `uv` is installed. Prefer it for Python projects: `uv init --bare`, "
+            "`uv add pytest`, `uv run pytest -q` (concise output), `uv run python app.py`."
+        )
+    python = shutil.which("python3", path=search_path)
+    if python:
+        try:
+            version = subprocess.run(
+                [python, "--version"], capture_output=True, text=True, timeout=5
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            version = "unknown version"
+        lines.append(f"- `python3` on PATH is {version}.")
+    return "\n".join(lines) or "- No Python tooling detected."

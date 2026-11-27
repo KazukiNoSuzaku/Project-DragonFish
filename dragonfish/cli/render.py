@@ -190,9 +190,7 @@ class Renderer:
 
         body: Any
         if event.display and event.display.get("kind") == "diff":
-            body = Syntax(
-                event.display["diff"], "diff", theme="ansi_dark", background_color="default"
-            )
+            body = Group(Text(event.output, style=theme.MUTED), diff_view(event.display["diff"]))
         else:
             lines = event.output.rstrip().splitlines() or ["(no output)"]
             shown = lines[:MAX_OUTPUT_LINES]
@@ -214,6 +212,21 @@ class Renderer:
             style=theme.MUTED,
         )
         self.console.print(text)
+
+
+MAX_DIFF_LINES = 40
+
+
+def diff_view(diff: str, max_lines: int = MAX_DIFF_LINES) -> Any:
+    """A colored unified diff, trimmed to a readable length."""
+    lines = diff.splitlines()
+    if not lines:
+        return Text("(no changes)", style=theme.MUTED)
+    shown = "\n".join(lines[:max_lines])
+    view = Syntax(shown, "diff", theme="ansi_dark", background_color="default")
+    if len(lines) <= max_lines:
+        return view
+    return Group(view, Text(f"… +{len(lines) - max_lines} more diff lines", style=theme.MUTED))
 
 
 def _assistant(markdown: str) -> Any:
