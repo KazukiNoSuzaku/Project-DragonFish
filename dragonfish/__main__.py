@@ -40,11 +40,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--local",
         action="store_true",
-        help="run a local open model (Qwen via MLX, Apple Silicon) instead of Claude",
+        help="run a local open model (Qwen, in-process: MLX on Apple Silicon, llama.cpp "
+        "elsewhere) instead of Claude",
     )
     parser.add_argument(
         "--local-model",
-        help="Hugging Face MLX model id (default: mlx-community/Qwen3.5-9B-4bit)",
+        help="Hugging Face model repo id (default: a Qwen3.5 size picked for this machine)",
     )
     return parser
 
@@ -60,7 +61,7 @@ def build_agent(settings: Settings, demo: bool) -> Agent:
         provider = DemoProvider()
         registry = Registry([LOOK_AROUND])
     elif settings.provider == "local":
-        provider = _start_local(settings)
+        provider, settings = _start_local(settings)  # settings gain the chosen model
     else:
         from dragonfish.providers.anthropic_provider import AnthropicProvider
 
@@ -74,28 +75,26 @@ def build_agent(settings: Settings, demo: bool) -> Agent:
     )
 
 
-def _start_local(settings: Settings) -> Provider:
+def _start_local(settings: Settings) -> tuple[Provider, Settings]:
     from rich.console import Console
 
-    from dragonfish.providers import local_mlx
+    from dragonfish.providers.local_engines import start_local
+    from dragonfish.providers.local_models import ModelChoice
 
     console = Console(stderr=True)
-    if not local_mlx.mlx_available():
-        raise ProviderError(
-            "Local models need the MLX extra (Apple Silicon only). Install it with: "
-            "uv sync --extra local"
-        )
-    if not local_mlx.is_downloaded(settings):
-        target = local_mlx.model_dir(settings)
+
+    def confirm(choice: ModelChoice, target: Path) -> bool:
+        size = f" (about {choice.size_gb:g} GB)" if choice.size_gb else ""
+        name = choice.file or choice.repo
         console.print(
-            f"[bold]{settings.local_model}[/] is not downloaded yet (about 6 GB).\n"
+            f"[bold]{name}[/] is not downloaded yet{size}; {choice.reason}.\n"
             f"It will be saved to {target}."
         )
-        if console.input("Download it now? [Y/n] ").strip().lower() not in ("", "y", "yes"):
-            raise ProviderError("Local model not downloaded.")
-        local_mlx.download_model(settings)
-    with console.status(f"Loading {settings.display_model} into memory…", spinner="dots"):
-        return local_mlx.LocalMLXProvider(settings)
+        return console.input("Download it now? [Y/n] ").strip().lower() in ("", "y", "yes")
+
+    return start_local(
+        settings, confirm, loading=lambda message: console.status(message, spinner="dots")
+    )
 
 
 def run_headless(agent: Agent, prompt: str) -> int:
@@ -111,6 +110,9 @@ def run_headless(agent: Agent, prompt: str) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    from dragonfish.platform.console import ensure_utf8_stdio
+
+    ensure_utf8_stdio()
     args = build_parser().parse_args(argv)
     settings = load_settings(args)
     try:

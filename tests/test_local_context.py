@@ -1,4 +1,4 @@
-"""Context-fitting logic of the local provider, with a fake tokenizer (no MLX needed)."""
+"""Context-fitting logic shared by every local engine, with a fake engine (no model needed)."""
 
 from __future__ import annotations
 
@@ -6,27 +6,27 @@ import pytest
 
 from dragonfish.core.config import Settings
 from dragonfish.providers.base import ProviderError
-from dragonfish.providers.local_mlx import LocalMLXProvider
+from dragonfish.providers.local_base import LocalProvider
 
 
-class FakeTokenizer:
+class FakeEngine(LocalProvider):
     """One token per character, so sizes are easy to reason about."""
 
-    def apply_chat_template(self, messages, **kwargs):
-        return "".join(m["content"] for m in messages)
+    engine = "fake"
 
-    def encode(self, text, add_special_tokens=False):
-        return [ord(c) % 256 for c in text]
+    def _load(self, model_path):
+        pass
+
+    def render_prompt(self, system, messages, tools, trim_first=0):
+        return "".join(m["content"] for m in self.qwen_messages(system, messages, trim_first))
+
+    def encode(self, prompt):
+        return [ord(c) % 256 for c in prompt]
 
 
-def provider(context: int) -> LocalMLXProvider:
-    p = object.__new__(LocalMLXProvider)  # skip loading a real model
-    p.settings = Settings(provider="local", local_context=context, local_keep_tool_results=2)
-    p.thinking = False
-    p._tokenizer = FakeTokenizer()
-    p._trim_first = 0
-    p._last_history_len = 0
-    return p
+def provider(context: int) -> FakeEngine:
+    settings = Settings(provider="local", local_context=context, local_keep_tool_results=2)
+    return FakeEngine(settings, model_path=None)
 
 
 def history(n_results: int, size: int) -> list[dict]:

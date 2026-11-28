@@ -3,8 +3,9 @@
 A small, hand-built AI coding agent for your terminal. You describe a task and DragonFish
 plans it, writes the files, runs the code and tests, reads the errors, and fixes them.
 
-DragonFish runs an open model (**Qwen**) **entirely on your own Mac**: no API key, no account,
-no internet connection once the model is downloaded, and no cost per request.
+DragonFish runs an open model (**Qwen**) **entirely on your own computer**, Windows or Mac:
+no API key, no account, no internet connection once the model is downloaded, and no cost per
+request. It picks a model size that fits your machine, from a 4 GB laptop up to a gaming PC.
 
 > Status: early, work in progress. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
@@ -12,16 +13,20 @@ no internet connection once the model is downloaded, and no cost per request.
 
 ## Requirements
 
-| | Needed |
-|---|---|
-| Computer | A Mac with Apple Silicon (M1 or newer) |
-| Operating system | macOS 14 (Sonoma) or newer |
-| Memory | 16 GB recommended for the default model; 8 GB works with the smaller model (see below) |
-| Disk space | About 7 GB free (6 GB for the default model) |
-| Tools | [`uv`](https://docs.astral.sh/uv/) (installs Python for you) and `git` |
+| | Windows | Mac |
+|---|---|---|
+| Computer | Any 64-bit PC (a GPU is optional, see [Using your GPU](#using-your-gpu-on-windows)) | Apple Silicon (M1 or newer) |
+| Operating system | Windows 10 or 11 | macOS 14 (Sonoma) or newer |
+| Memory | 4 GB minimum; 8 GB or more for the larger models | 8 GB minimum; 16 GB recommended |
+| Disk space | 0.5–3 GB for the model DragonFish picks, plus about 0.3 GB for the program | About 7 GB |
+| Tools | [`uv`](https://docs.astral.sh/uv/); [Git for Windows](https://git-scm.com/download/win) recommended | [`uv`](https://docs.astral.sh/uv/) and `git` |
 
-The local model runs on [MLX](https://github.com/ml-explore/mlx), Apple's machine-learning
-framework, so it does not work on Intel Macs, Windows or Linux yet.
+The model runs inside DragonFish: with [llama.cpp](https://github.com/ggml-org/llama.cpp) on
+Windows (on the CPU by default) and with [MLX](https://github.com/ml-explore/mlx), Apple's
+machine-learning framework, on Apple Silicon Macs. Linux and Intel Macs are not supported yet.
+
+On Windows, DragonFish runs the agent's commands in **Git Bash** (part of Git for Windows).
+Without it, it falls back to PowerShell, which works, but small models write bash more reliably.
 
 ---
 
@@ -31,6 +36,14 @@ framework, so it does not work on Intel Macs, Windows or Linux yet.
 
 `uv` manages Python and DragonFish's dependencies. You don't need to install Python yourself:
 `uv` downloads Python 3.12 automatically.
+
+Windows (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Mac:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -51,8 +64,9 @@ cd Project-DragonFish
 uv tool install --editable ".[local]"
 ```
 
-This installs DragonFish with its local-model support, and puts a `dragonfish` command in
-`~/.local/bin` so you can run it from any folder. `--editable` means changes you make to
+This installs DragonFish with its local-model support (llama.cpp on Windows, MLX on Apple
+Silicon; both prebuilt, so no compiler is needed), and puts a `dragonfish` command in
+`~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows) so you can run it from any folder. `--editable` means changes you make to
 the code take effect immediately, without reinstalling.
 
 If your terminal then says `dragonfish: command not found`, run `uv tool update-shell` and
@@ -66,8 +80,9 @@ Start DragonFish once:
 dragonfish --local
 ```
 
-On the first run it asks to download **Qwen3.5-9B** (about 6 GB) from Hugging Face. Answer
-`Y`. The download is saved to `~/.dragonfish/models/` and happens only once. If it gets
+On the first run it picks a Qwen3.5 model that fits your computer (see
+[Choosing a model](#choosing-a-model)), shows its size, and asks to download it from Hugging
+Face. Answer `Y`. The download is saved to `~/.dragonfish/models/` and happens only once. If it gets
 interrupted, run the same command again and it resumes.
 
 When the download finishes, the model loads (a few seconds) and the DragonFish prompt `❯` appears.
@@ -140,27 +155,55 @@ Use `yolo` only in a throwaway folder.
 
 ## Choosing a model
 
-| Model | Download | Best for |
-|---|---|---|
-| `mlx-community/Qwen3.5-9B-4bit` (default) | 6 GB | 16 GB Macs; best results |
-| `mlx-community/Qwen3.5-4B-MLX-4bit` | 3 GB | 8 GB Macs, or when you want it lighter and faster |
+By default DragonFish picks the largest Qwen3.5 model that runs well on your machine:
+
+| Your machine | Model | Download | Context |
+|---|---|---|---|
+| Windows, up to 6 GB RAM | `unsloth/Qwen3.5-0.8B-GGUF` (Q4_K_M) | 0.5 GB | 16k tokens |
+| Windows, 7–10 GB RAM | `unsloth/Qwen3.5-2B-GGUF` | 1.3 GB | 16k |
+| Windows, 11 GB RAM or more | `unsloth/Qwen3.5-4B-GGUF` | 2.7 GB | 32k |
+| Windows, GPU build and an NVIDIA GPU with 7 GB+ | `unsloth/Qwen3.5-9B-GGUF` | 5.7 GB | 64k |
+| Mac, 8 GB | `mlx-community/Qwen3.5-4B-MLX-4bit` | 3 GB | 32k |
+| Mac, 16 GB or more | `mlx-community/Qwen3.5-9B-4bit` | 6 GB | 64k |
+
+On the CPU, DragonFish stops at 4B so replies stay quick. To pick a model yourself:
 
 ```bash
-dragonfish --local --local-model mlx-community/Qwen3.5-4B-MLX-4bit
+dragonfish --local --local-model unsloth/Qwen3.5-9B-GGUF            # Windows: a GGUF repo
+dragonfish --local --local-model mlx-community/Qwen3.5-4B-MLX-4bit  # Mac: an MLX repo
+```
+
+Or set it in `~/.dragonfish/config.toml`:
+
+```toml
+local_model = "unsloth/Qwen3.5-2B-GGUF"
+local_model_file = "Qwen3.5-2B-Q8_0.gguf"  # optional; the default is the Q4_K_M file
+local_context = 16384                      # optional
 ```
 
 Any model is downloaded on first use, the same way as the default.
+
+### Using your GPU on Windows
+
+The default install runs on the CPU, so it works on every PC. With an NVIDIA GPU, install the
+CUDA build instead (for any other GPU, replace `cu124` with `vulkan`):
+
+```powershell
+uv tool install --editable ".[local]" --force --reinstall-package llama-cpp-python --index llama-cpp-cpu=https://abetlen.github.io/llama-cpp-python/whl/cu124
+```
+
+DragonFish then puts the whole model on the GPU, and picks a bigger model if the GPU has room.
 
 ---
 
 ## Performance and memory
 
-- **While DragonFish is open** in local mode, the model uses about 6–8 GB of memory (about
-  3–4 GB with the 4B model). While it is generating, your Mac's GPU is busy and other apps
-  may feel slower, especially on a 16 GB Mac with many apps open.
+- **While DragonFish is open** in local mode, the model uses about its download size plus
+  0.5–2 GB of memory (about 1 GB for 0.8B, 6–8 GB for 9B). While it is generating, the CPU
+  or GPU is busy and other apps may feel slower.
 - **When you quit DragonFish**, all of that memory is freed immediately. Nothing keeps
   running in the background: there is no server or background service.
-- To make it lighter: use `--effort medium`, use the 4B model, or close memory-heavy apps.
+- To make it lighter: use `--effort medium`, a smaller model, or close memory-heavy apps.
 - Expect a small local model to be slower and make more mistakes than large cloud models.
   It reads its own errors and retries, so give it a few steps.
 
@@ -169,7 +212,7 @@ Any model is downloaded on first use, the same way as the default.
 ## How it works
 
 DragonFish does not use Ollama or any model server. The model runs **inside the DragonFish
-process** using MLX:
+process**, using llama.cpp (Windows) or MLX (Apple Silicon):
 
 1. The conversation is converted to Qwen's chat format, including the list of tools.
 2. Qwen generates a reply token by token, streamed to your screen.
@@ -184,7 +227,11 @@ The code is organised as:
 ```
 dragonfish/
   core/       the agent loop, permissions, settings, events
-  providers/  model back ends: local_mlx.py (Qwen via MLX), qwen_format.py (prompt + parsing)
+  platform/   everything that differs per OS: detection, shells (bash, Git Bash, PowerShell),
+              starting and stopping processes
+  providers/  model back ends: local_base.py (shared local logic), local_llama.py (llama.cpp),
+              local_mlx.py (MLX), local_engines.py and local_models.py (which engine and
+              model fit this machine), qwen_format.py (prompt + parsing)
   tools/      file tools (fs.py) and the shell tool (shell.py)
   cli/        the terminal interface: banner, rendering, prompt, slash commands
 ```
@@ -199,6 +246,8 @@ dragonfish/
 | `~/.dragonfish/history` | your prompt history |
 | `~/.dragonfish/config.toml` | optional default settings (for example `effort = "medium"`) |
 
+On Windows, `~` is your user folder (`C:\Users\<you>`).
+
 ---
 
 ## Troubleshooting
@@ -206,11 +255,13 @@ dragonfish/
 | Problem | Fix |
 |---|---|
 | `dragonfish: command not found` | Run `uv tool update-shell`, then open a new terminal. |
-| `Local models need the MLX extra` | Reinstall with the extra: `uv tool install --editable ".[local]" --force` |
+| `Local models need the local extra` | Reinstall with the extra: `uv tool install --editable ".[local]" --force` |
+| Commands run in PowerShell instead of bash (Windows) | Install [Git for Windows](https://git-scm.com/download/win), or set `DRAGONFISH_SHELL` to the full path of your `bash.exe`. |
+| `Python was not found; ... Microsoft Store` (Windows) | Install Python from python.org, or run `uv python install`. |
 | The download stopped partway | Run `dragonfish --local` again; it resumes. |
 | `The conversation is too long for the local model` | Type `/clear` to start a fresh conversation. |
 | It is slow, or the Mac feels sluggish | Use `--effort medium` or the 4B model, and close other heavy apps. |
-| The pixel banner looks garbled | Use a terminal with true-color support: iTerm2, Ghostty, or the VS Code terminal. |
+| The pixel banner looks garbled | Use a terminal with true-color support: Windows Terminal, iTerm2, Ghostty, or the VS Code terminal. |
 
 ---
 
@@ -220,6 +271,8 @@ dragonfish/
 uv tool uninstall dragonfish
 rm -rf ~/.dragonfish          # removes downloaded models, history and settings
 ```
+
+On Windows (PowerShell), the second line is `Remove-Item -Recurse -Force ~\.dragonfish`.
 
 ---
 

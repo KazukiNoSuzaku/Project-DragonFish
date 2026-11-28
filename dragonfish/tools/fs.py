@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from dragonfish.platform.detect import to_native_path
 from dragonfish.tools.base import Permission, Tool, ToolContext, ToolError, ToolResult
 
 SKIP_DIRS = {
@@ -28,12 +29,13 @@ SKIP_DIRS = {
 }
 MAX_READ_BYTES = 5_000_000
 MAX_LINE_CHARS = 2_000
+SKIP_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}  # OS metadata files
 
 
 def resolve_in_workspace(workspace: Path, path: str) -> Path:
     """Resolve `path` against the workspace; refuse anything that ends up outside it."""
     root = workspace.resolve()
-    candidate = Path(path).expanduser()
+    candidate = Path(to_native_path(path)).expanduser()
     if not candidate.is_absolute():
         candidate = root / candidate
     resolved = candidate.resolve()  # follows symlinks, collapses ".."
@@ -48,7 +50,8 @@ def resolve_in_workspace(workspace: Path, path: str) -> Path:
 
 def _rel(workspace: Path, path: Path) -> str:
     try:
-        return str(path.relative_to(workspace.resolve())) or "."
+        # Forward slashes on every OS: one form for the model, the UI and diffs.
+        return path.relative_to(workspace.resolve()).as_posix()
     except ValueError:
         return str(path)
 
@@ -114,7 +117,7 @@ def write_file(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
     existed = path.exists()
     path.parent.mkdir(parents=True, exist_ok=True)
     content = inp["content"]
-    path.write_text(content, encoding="utf-8")
+    path.write_text(content, encoding="utf-8", newline="")  # exactly these bytes, on any OS
     n = len(content.splitlines())
     verb = "Updated" if existed else "Created"
     return _diff_result(f"{verb} {rel} ({n} lines).", rel, before, content)
@@ -130,6 +133,10 @@ def edit_file(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
         raise ToolError("old_string is empty. Use write_file to create or replace a whole file.")
     before = _read_text(path)
     count = before.count(old)
+    if count == 0 and "\r\n" in before and "\n" in old:
+        # The model writes \n; a Windows-style file has \r\n. Match in the file's style.
+        old, new = _crlf(old), _crlf(new)
+        count = before.count(old)
     if count == 0:
         raise ToolError(
             f"old_string was not found in {rel}. Read the file first and copy the exact text, "
@@ -141,10 +148,14 @@ def edit_file(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
             "it unique, or set replace_all to true."
         )
     after = before.replace(old, new)
-    path.write_text(after, encoding="utf-8")
+    path.write_text(after, encoding="utf-8", newline="")
     return _diff_result(
         f"Edited {rel} ({count} replacement{'s' * (count > 1)}).", rel, before, after
     )
+
+
+def _crlf(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\n", "\r\n")
 
 
 def list_dir(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -160,7 +171,7 @@ def list_dir(inp: dict[str, Any], ctx: ToolContext) -> ToolResult:
             entries = sorted(folder.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
         except PermissionError:
             return
-        entries = [e for e in entries if e.name not in SKIP_DIRS and e.name != ".DS_Store"]
+        entries = [e for e in entries if e.name not in SKIP_DIRS and e.name not in SKIP_FILES]
         for entry in entries:
             if len(lines) >= limit:
                 return
