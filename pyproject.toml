@@ -8,13 +8,32 @@ dependencies = [
     "anthropic>=1.0",
     "jsonschema>=4.23",
     "prompt-toolkit>=3.0",
+    "psutil>=5.9",
     "python-dotenv>=1.0",
     "rich>=13.9",
 ]
 
 [project.optional-dependencies]
-# Run a local open model (Qwen) on Apple Silicon: uv sync --extra local
-local = ["mlx-lm>=0.28", "huggingface-hub>=0.30"]
+# Run a local open model (Qwen) in-process: uv sync --extra local
+# The engine depends on the machine: MLX on Apple Silicon, llama.cpp everywhere else.
+local = [
+    "huggingface-hub>=0.30",
+    "jinja2>=3.1",
+    "mlx-lm>=0.28; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # 0.3.38's prebuilt CPU wheel crashes on CPUs without AVX-512 (illegal instruction).
+    "llama-cpp-python>=0.3.36,!=0.3.38; sys_platform != 'darwin' or platform_machine != 'arm64'",
+]
+
+# Prebuilt llama.cpp wheels, so installing never needs a C++ compiler. The CPU build runs on
+# any x86-64 PC. For an NVIDIA GPU, swap the URL for .../whl/cu124 (or .../whl/vulkan for any
+# GPU) and reinstall; DragonFish then offloads the model to the GPU automatically.
+[[tool.uv.index]]
+name = "llama-cpp-cpu"
+url = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+llama-cpp-python = [{ index = "llama-cpp-cpu", marker = "sys_platform == 'win32'" }]
 
 [project.scripts]
 dragonfish = "dragonfish.__main__:main"
@@ -23,6 +42,7 @@ dragonfish = "dragonfish.__main__:main"
 dev = [
     "mypy>=1.13",
     "types-jsonschema>=4.23",
+    "types-psutil>=5.9",
     "pytest>=8.3",
     "ruff>=0.8",
 ]
@@ -41,6 +61,11 @@ extend-exclude = ["docs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[[tool.mypy.overrides]]
+# Local engines are optional and each installs on some machines only.
+module = ["mlx_lm", "mlx_lm.*", "llama_cpp", "llama_cpp.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,11 +1,12 @@
-"""Live smoke test for the local Qwen model (Apple Silicon, MLX). Free, offline.
+"""Live smoke test for the local Qwen model (MLX or llama.cpp, whichever runs here). Offline.
 
 Checks:
   1. a plain streamed answer
   2. a real tool loop in a temp workspace: write a script, run it, report the output
   3. the KV cache is reused across steps of the tool loop
 
-Run:  uv run --extra local python scripts/local_smoke.py [--effort medium]
+Run:  uv run --extra local python scripts/local_smoke.py [--effort medium] [--model REPO]
+      [--context N]   (the model is downloaded first if needed)
 """
 
 from __future__ import annotations
@@ -22,25 +23,33 @@ from dragonfish.core.agent import Agent
 from dragonfish.core.config import Settings, load_system_prompt
 from dragonfish.core.events import TextDelta, ToolResultEvent, TurnUsage
 from dragonfish.core.permissions import PermissionGate
-from dragonfish.providers.local_mlx import LocalMLXProvider
+from dragonfish.platform.console import ensure_utf8_stdio
+from dragonfish.providers.local_engines import start_local
 from dragonfish.tools import default_tools
 from dragonfish.tools.registry import Registry
 
 
 def main() -> int:
+    ensure_utf8_stdio()
     parser = argparse.ArgumentParser()
     parser.add_argument("--effort", default="high")
-    parser.add_argument("--model", default=Settings().local_model)
+    parser.add_argument("--model", default=None, help="repo id (default: sized to this machine)")
+    parser.add_argument("--context", type=int, default=None)
     args = parser.parse_args()
 
     workspace = Path(tempfile.mkdtemp(prefix="df-local-"))
     settings = Settings(
-        workspace=workspace, provider="local", effort=args.effort, local_model=args.model
+        workspace=workspace,
+        provider="local",
+        effort=args.effort,
+        local_model=args.model,
+        local_context=args.context,
     )
     t0 = time.monotonic()
-    provider = LocalMLXProvider(settings)
+    provider, settings = start_local(settings, confirm_download=lambda choice, target: True)
     print(
-        f"Loaded {settings.display_model} in {time.monotonic() - t0:.1f}s "
+        f"Loaded {settings.display_model} with {settings.local_engine} "
+        f"(context {settings.local_context:,}) in {time.monotonic() - t0:.1f}s "
         f"(thinking {'on' if provider.thinking else 'off'}); workspace {workspace}"
     )
 
@@ -66,7 +75,7 @@ def main() -> int:
         failures.append("plain answer")
 
     events = run(
-        "Create a file hello.py that prints the result of 6 * 7, run it with python3, "
+        "Create a file hello.py that prints the result of 6 * 7, run it with Python, "
         "and tell me what it printed."
     )
     results = [e for e in events if isinstance(e, ToolResultEvent)]
