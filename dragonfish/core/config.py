@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import platform
 import shutil
 import subprocess
 import tomllib
@@ -15,8 +14,11 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from dragonfish.platform.detect import current, is_store_stub
+
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 PERMISSION_MODES = ("ask", "auto-edit", "yolo")
+LOCAL_ENGINES = ("auto", "mlx", "llamacpp")
 
 
 class ConfigError(ValueError):
@@ -37,10 +39,13 @@ class Settings:
     max_iterations: int = 60  # Hard stop for runaway loops.
     refusal_fallback: bool = True  # Server-side fallback model when a request is refused.
     data_dir: Path = field(default_factory=_default_data_dir)
-    # Local open model (MLX, Apple Silicon). Used when provider == "local".
+    # Local open model, run in-process. Used when provider == "local".
     provider: str = "anthropic"  # anthropic | local
-    local_model: str = "mlx-community/Qwen3.5-9B-4bit"
-    local_context: int = 65536  # Qwen3.5-9B: ~32 KB of KV cache per token -> ~2 GB at 64k
+    local_engine: str = "auto"  # auto | mlx (Apple Silicon) | llamacpp (everything else)
+    local_model: str | None = None  # Hugging Face repo id; None = sized to this machine
+    local_model_file: str | None = None  # GGUF file inside the repo (llama.cpp only)
+    local_context: int | None = None  # tokens; None = the chosen model's default
+    local_gpu_layers: int = -1  # llama.cpp: layers on the GPU if the build has one (-1 = all)
     local_max_tokens: int = 8192
     local_keep_tool_results: int = 6  # newest tool results kept in full when trimming
 
@@ -52,7 +57,8 @@ class Settings:
     @property
     def display_model(self) -> str:
         if self.provider == "local":
-            return f"{self.local_model.split('/')[-1]} (local)"
+            name = (self.local_model or "auto").split("/")[-1].removesuffix("-GGUF")
+            return f"{name} (local)"
         return self.model
 
     def __post_init__(self) -> None:
@@ -64,6 +70,10 @@ class Settings:
             )
         if self.provider not in ("anthropic", "local"):
             raise ConfigError(f"provider must be 'anthropic' or 'local', got {self.provider!r}")
+        if self.local_engine not in LOCAL_ENGINES:
+            raise ConfigError(
+                f"local_engine must be one of {LOCAL_ENGINES}, got {self.local_engine!r}"
+            )
         if self.max_iterations < 1:
             raise ConfigError("max_iterations must be at least 1")
         # Normalise the workspace once so every path check compares resolved paths.
@@ -111,15 +121,25 @@ def load_system_prompt(settings: Settings) -> str:
     template = resources.files("dragonfish.prompts").joinpath("system.md").read_text("utf-8")
     return template.format(
         workspace=settings.workspace,
-        os=f"{platform.system()} {platform.release()} ({platform.machine()})",
+        os=current().describe(),
         date=date.today().isoformat(),
+        shell=_shell_hint(),
         tooling=detect_tooling(settings.workspace),
     )
 
 
+def _shell_hint() -> str:
+    from dragonfish.platform.shell import ShellNotFound, find_shell
+
+    try:
+        return find_shell().prompt_hint
+    except ShellNotFound:
+        return "- Shell: none found; the command tool will report how to install one."
+
+
 def detect_tooling(workspace: Path) -> str:
     """Describe the Python tooling the agent's shell will see, so it picks working commands."""
-    from dragonfish.tools.shell import build_env  # same PATH as the bash tool
+    from dragonfish.tools.shell import build_env  # same PATH as the shell tool
 
     search_path = build_env(workspace)["PATH"]
     lines = []
@@ -128,13 +148,16 @@ def detect_tooling(workspace: Path) -> str:
             "- `uv` is installed. Prefer it for Python projects: `uv init --bare`, "
             "`uv add pytest`, `uv run pytest -q` (concise output), `uv run python app.py`."
         )
-    python = shutil.which("python3", path=search_path)
-    if python:
+    for name in current().python_names:
+        python = shutil.which(name, path=search_path)
+        if not python or is_store_stub(python):  # a Store alias is not a real Python
+            continue
         try:
             version = subprocess.run(
                 [python, "--version"], capture_output=True, text=True, timeout=5
             ).stdout.strip()
         except (OSError, subprocess.SubprocessError):
             version = "unknown version"
-        lines.append(f"- `python3` on PATH is {version}.")
+        lines.append(f"- `{name}` on PATH is {version or 'unknown version'}.")
+        break
     return "\n".join(lines) or "- No Python tooling detected."

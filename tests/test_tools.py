@@ -8,6 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from dragonfish.platform.detect import current
+from dragonfish.platform.process import kill_pid_tree
+from dragonfish.platform.shell import find_shell
 from dragonfish.tools import default_tools
 from dragonfish.tools.base import ToolContext, ToolError
 from dragonfish.tools.fs import (
@@ -20,6 +23,12 @@ from dragonfish.tools.fs import (
 )
 from dragonfish.tools.registry import Registry
 from dragonfish.tools.shell import DENYLIST, build_env, check_denylist, run_bash
+
+PYTHON = current().python_names[0]  # "python3" on macOS/Linux, "python" on Windows
+
+
+def background_pid(output: str) -> int:
+    return int(output.split("pid ")[1].split(")")[0])
 
 
 @pytest.fixture
@@ -46,7 +55,10 @@ def test_paths_outside_workspace_rejected(ws, bad):
 def test_symlink_escape_rejected(ws, tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
-    (ws / "link").symlink_to(outside)
+    try:
+        (ws / "link").symlink_to(outside, target_is_directory=True)
+    except OSError:  # Windows allows symlinks only in Developer Mode or as administrator
+        pytest.skip("cannot create symlinks here")
     with pytest.raises(ToolError):
         resolve_in_workspace(ws, "link/file.txt")
 
@@ -132,7 +144,8 @@ def test_grep(ctx, ws):
 
 def test_default_tool_schemas_are_valid():
     registry = Registry(default_tools())
-    assert registry.names() == ["read_file", "write_file", "edit_file", "list_dir", "grep", "bash"]
+    shell = find_shell().name  # "bash", or "powershell" on Windows without Git Bash
+    assert registry.names() == ["read_file", "write_file", "edit_file", "list_dir", "grep", shell]
     assert registry.validate("write_file", {"path": "a", "content": "b"}) is None
     assert registry.validate("write_file", {"path": "a"}) is not None
 
@@ -141,8 +154,10 @@ def test_default_tool_schemas_are_valid():
 
 
 def test_bash_runs_in_workspace(ctx, ws):
-    result = run_bash({"command": "pwd && echo hi"}, ctx)
-    assert str(ws) in result.output and "hi" in result.output
+    # pwd prints /c/... in Git Bash, so check the working directory by its contents.
+    (ws / "marker-file.txt").write_text("")
+    result = run_bash({"command": "ls && echo hi"}, ctx)
+    assert "marker-file.txt" in result.output and "hi" in result.output
     assert "[exit code 0]" in result.output and not result.is_error
 
 
@@ -168,8 +183,7 @@ def test_bash_cancel(ws):
 def test_bash_background(ctx):
     result = run_bash({"command": "sleep 5", "background": True}, ctx)
     assert "Started in the background" in result.output
-    pid = int(result.output.split("pid ")[1].split(")")[0])
-    os.kill(pid, 9)
+    kill_pid_tree(background_pid(result.output))
 
 
 def test_bash_background_reports_immediate_crash(ctx):
@@ -210,18 +224,20 @@ def test_denylist_has_reasons():
     assert all(reason for _, reason in DENYLIST)
 
 
-def test_env_hides_own_venv_and_uses_project_venv(ws, monkeypatch):
-    fake_prefix = "/tmp/fake-dragonfish-venv"
-    monkeypatch.setattr(sys, "prefix", fake_prefix)
-    monkeypatch.setattr(sys, "base_prefix", "/usr")
-    monkeypatch.setenv("PATH", f"{fake_prefix}/bin{os.pathsep}/usr/bin")
-    monkeypatch.setenv("VIRTUAL_ENV", fake_prefix)
-    (ws / ".venv" / "bin").mkdir(parents=True)
+def test_env_hides_own_venv_and_uses_project_venv(ws, tmp_path, monkeypatch):
+    bin_dir = current().venv_bin_dir  # "Scripts" on Windows, "bin" elsewhere
+    fake_prefix = tmp_path / "fake-dragonfish-venv"
+    own_bin = str(fake_prefix / bin_dir)
+    monkeypatch.setattr(sys, "prefix", str(fake_prefix))
+    monkeypatch.setattr(sys, "base_prefix", str(tmp_path / "base"))
+    monkeypatch.setenv("PATH", f"{own_bin}{os.pathsep}{tmp_path / 'usr-bin'}")
+    monkeypatch.setenv("VIRTUAL_ENV", str(fake_prefix))
+    (ws / ".venv" / bin_dir).mkdir(parents=True)
 
     env = build_env(ws)
     path = env["PATH"].split(os.pathsep)
-    assert f"{fake_prefix}/bin" not in path
-    assert path[0] == str(ws / ".venv" / "bin")
+    assert own_bin not in path
+    assert path[0] == str(ws / ".venv" / bin_dir)
     assert env["VIRTUAL_ENV"] == str(ws / ".venv")
 
 
@@ -238,7 +254,7 @@ def test_agent_writes_and_runs_code(ws):
             mock_turn(
                 "Writing it.", [("write_file", {"path": "hi.py", "content": "print(6*7)\n"})]
             ),
-            mock_turn("Running it.", [("bash", {"command": "python3 hi.py"})]),
+            mock_turn("Running it.", [(find_shell().name, {"command": f"{PYTHON} hi.py"})]),
             mock_turn("It prints 42."),
         ]
     )
@@ -257,5 +273,5 @@ def test_trailing_ampersand_runs_in_background(ctx):
     result = run_bash({"command": "sleep 5 &"}, ctx)
     assert time.monotonic() - start < 4
     assert "Started in the background" in result.output
-    os.kill(int(result.output.split("pid ")[1].split(")")[0]), 9)
+    kill_pid_tree(background_pid(result.output))
     assert "[exit code 0]" in run_bash({"command": "true && echo ok"}, ctx).output

@@ -5,6 +5,7 @@ end to end by using your tools to read and write files, run commands, and look t
 - Workspace: {workspace}
 - Operating system: {os}
 - Today's date: {date}
+{shell}
 {tooling}
 
 All file paths are relative to the workspace. You cannot read or write outside it.
